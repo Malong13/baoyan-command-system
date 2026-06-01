@@ -1,1 +1,630 @@
-<h1>保研作战系统</h1>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>保研作战系统</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: '#08090b',
+            panel: '#111318',
+            card: '#171a21',
+            line: '#262a33',
+            muted: '#8d94a3',
+            soft: '#c9ced8',
+            brand: '#8b9cff'
+          },
+          boxShadow: {
+            glow: '0 18px 60px rgba(0,0,0,.35)'
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    /* 深色极简基底：减少视觉噪声，保留长期使用的清晰层级。 */
+    html { color-scheme: dark; }
+    body { background: radial-gradient(circle at top left, rgba(139,156,255,.10), transparent 34rem), #08090b; }
+    .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #2f3541; border-radius: 999px; }
+    .safe-bottom { padding-bottom: max(5.75rem, env(safe-area-inset-bottom)); }
+    .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  </style>
+</head>
+<body class="min-h-screen text-soft antialiased selection:bg-brand/30 selection:text-white">
+  <div class="mx-auto flex min-h-screen w-full max-w-7xl flex-col lg:flex-row">
+    <!-- 桌面侧边栏；移动端使用底部 Tab。 -->
+    <aside class="sticky top-0 hidden h-screen w-72 shrink-0 border-r border-line/80 bg-ink/70 p-5 backdrop-blur-xl lg:block">
+      <div class="mb-8 rounded-3xl border border-line bg-panel/80 p-5 shadow-glow">
+        <p class="text-xs uppercase tracking-[0.32em] text-muted">Command</p>
+        <h1 class="mt-2 text-2xl font-semibold tracking-tight text-white">保研作战系统</h1>
+        <p class="mt-3 text-sm leading-6 text-muted">把成果、材料、院校、套磁、待办收拢到一个安静的本地工作台。</p>
+      </div>
+      <nav id="desktopTabs" class="space-y-2"></nav>
+    </aside>
+
+    <main class="flex-1 safe-bottom lg:pb-0">
+      <header class="sticky top-0 z-30 border-b border-line/80 bg-ink/80 px-4 py-4 backdrop-blur-xl sm:px-6 lg:px-8">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p id="eyebrow" class="text-xs uppercase tracking-[0.32em] text-muted">Dashboard</p>
+            <h2 id="pageTitle" class="mt-1 text-2xl font-semibold tracking-tight text-white sm:text-3xl">首页</h2>
+          </div>
+          <div class="flex items-center gap-2 rounded-2xl border border-line bg-panel/70 px-3 py-2 text-xs text-muted">
+            <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
+            <span>数据仅保存在本机 localStorage</span>
+          </div>
+        </div>
+      </header>
+
+      <section id="app" class="px-4 py-5 sm:px-6 lg:px-8"></section>
+    </main>
+  </div>
+
+  <nav id="mobileTabs" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-7 border-t border-line bg-ink/95 px-2 pb-[max(.6rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-xl lg:hidden"></nav>
+
+  <!-- 通用弹窗：所有新增/编辑表单均在此渲染，避免页面跳转。 -->
+  <div id="modal" class="fixed inset-0 z-50 hidden items-end bg-black/70 p-3 backdrop-blur-sm sm:items-center sm:justify-center">
+    <div class="max-h-[92vh] w-full max-w-2xl overflow-hidden rounded-3xl border border-line bg-panel shadow-glow">
+      <div class="flex items-center justify-between border-b border-line px-5 py-4">
+        <div>
+          <p id="modalKicker" class="text-xs uppercase tracking-[0.24em] text-muted">Form</p>
+          <h3 id="modalTitle" class="mt-1 text-lg font-semibold text-white">编辑</h3>
+        </div>
+        <button id="closeModal" class="rounded-full border border-line px-3 py-1.5 text-sm text-muted hover:border-white/30 hover:text-white">关闭</button>
+      </div>
+      <form id="modalForm" class="scrollbar-thin max-h-[calc(92vh-5rem)] overflow-y-auto p-5"></form>
+    </div>
+  </div>
+
+  <template id="fieldTemplate">
+    <label class="block">
+      <span class="mb-2 block text-sm font-medium text-soft"></span>
+      <div class="field-slot"></div>
+    </label>
+  </template>
+
+  <script>
+    'use strict';
+
+    /**
+     * 保研作战系统 v1
+     * - 无后端、无构建工具；所有状态持久化到 localStorage。
+     * - 以配置驱动各数据模块，减少重复 DOM 逻辑，便于后续扩展字段。
+     */
+    const STORAGE_KEY = 'baoyan-command-system:v1';
+
+    const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const today = () => new Date().toISOString().slice(0, 10);
+    const byId = (id) => document.getElementById(id);
+    const escapeHtml = (value = '') => String(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+    const safeUrl = (value = '') => /^https?:\/\//i.test(String(value).trim()) ? String(value).trim() : '';
+
+    const tabs = [
+      { key: 'dashboard', label: '首页', icon: '⌁' },
+      { key: 'achievements', label: '成果', icon: '✦' },
+      { key: 'materials', label: '材料', icon: '▣' },
+      { key: 'schools', label: '院校', icon: '◎' },
+      { key: 'contacts', label: '套磁', icon: '↗' },
+      { key: 'todos', label: '待办', icon: '✓' },
+      { key: 'settings', label: '数据', icon: '⚙' }
+    ];
+
+    const moduleConfig = {
+      achievements: {
+        title: '成果清单',
+        addText: '新增成果',
+        searchPlaceholder: '搜索类型、名称、描述、备注…',
+        filterField: 'type',
+        filterLabel: '类型',
+        cardTitle: 'name',
+        cardSubtitle: (item) => `${item.type || '未分类'} · ${item.time || '未填写时间'} · ${item.level || '未填写级别'}`,
+        badges: [
+          { key: 'proofStatus', tone: 'blue' },
+          { key: 'level', tone: 'slate' }
+        ],
+        fields: [
+          { key: 'type', label: '类型', type: 'select', options: ['论文', '竞赛', '科研', '项目', '专利', '奖学金', '学生工作', '其他'], required: true },
+          { key: 'name', label: '名称', type: 'text', required: true },
+          { key: 'time', label: '时间', type: 'date' },
+          { key: 'level', label: '级别', type: 'select', options: ['国家级', '省部级', '校级', '院级', '实验室/团队', '其他'] },
+          { key: 'proofStatus', label: '证明材料状态', type: 'select', options: ['未整理', '待扫描', '已有电子版', '已归档'] },
+          { key: 'resumeText', label: '简历描述', type: 'textarea', span: true },
+          { key: 'note', label: '备注', type: 'textarea', span: true }
+        ]
+      },
+      materials: {
+        title: '材料归档',
+        addText: '新增材料',
+        searchPlaceholder: '搜索材料、类别、位置、学校…',
+        filterField: 'category',
+        filterLabel: '类别',
+        cardTitle: 'name',
+        cardSubtitle: (item) => `${item.category || '未分类'} · ${item.fileLocation || '未填写位置'}`,
+        badges: [
+          { key: 'hasMaterial', tone: 'green' },
+          { key: 'scanned', tone: 'purple' }
+        ],
+        fields: [
+          { key: 'name', label: '材料名称', type: 'text', required: true },
+          { key: 'category', label: '类别', type: 'select', options: ['身份证明', '成绩证明', '排名证明', '英语证明', '成果证明', '推荐信', '申请表', '个人陈述', '其他'], required: true },
+          { key: 'hasMaterial', label: '是否已有', type: 'select', options: ['已有', '缺失', '办理中'] },
+          { key: 'scanned', label: '是否扫描', type: 'select', options: ['已扫描', '未扫描', '无需扫描'] },
+          { key: 'fileLocation', label: '文件位置', type: 'text' },
+          { key: 'schools', label: '适用学校', type: 'text' },
+          { key: 'note', label: '备注', type: 'textarea', span: true }
+        ]
+      },
+      schools: {
+        title: '目标院校',
+        addText: '新增院校',
+        searchPlaceholder: '搜索学校、学院、方向、状态…',
+        filterField: 'tier',
+        filterLabel: '层级',
+        cardTitle: (item) => `${item.school || '未命名学校'} · ${item.college || '未填写学院'}`,
+        cardSubtitle: (item) => `${item.major || '未填写方向'} · 状态：${item.status || '未设置'}`,
+        badges: [
+          { key: 'tier', tone: 'amber' },
+          { key: 'status', tone: 'blue' }
+        ],
+        fields: [
+          { key: 'school', label: '学校', type: 'text', required: true },
+          { key: 'college', label: '学院', type: 'text' },
+          { key: 'major', label: '专业方向', type: 'text' },
+          { key: 'tier', label: '层级（冲/稳/保）', type: 'select', options: ['冲', '稳', '保'], required: true },
+          { key: 'campDeadline', label: '夏令营截止', type: 'date' },
+          { key: 'preDeadline', label: '预推免截止', type: 'date' },
+          { key: 'requirements', label: '材料要求', type: 'textarea', span: true },
+          { key: 'website', label: '官网链接', type: 'url' },
+          { key: 'status', label: '状态', type: 'select', options: ['关注中', '准备材料', '已投递', '入营/入围', '被拒', '已放弃', '已录取'] },
+          { key: 'note', label: '备注', type: 'textarea', span: true }
+        ]
+      },
+      contacts: {
+        title: '套磁与申请进度',
+        addText: '新增记录',
+        searchPlaceholder: '搜索学校、导师、方向、邮箱、下一步…',
+        filterField: 'replyStatus',
+        filterLabel: '回复状态',
+        cardTitle: (item) => `${item.school || '未填写学校'} · ${item.supervisor || '未填写导师'}`,
+        cardSubtitle: (item) => `${item.direction || '未填写方向'} · 下一步：${item.nextAction || '未设置'}`,
+        badges: [
+          { key: 'sent', tone: 'green' },
+          { key: 'replyStatus', tone: 'blue' }
+        ],
+        fields: [
+          { key: 'school', label: '学校', type: 'text', required: true },
+          { key: 'supervisor', label: '导师', type: 'text' },
+          { key: 'direction', label: '方向', type: 'text' },
+          { key: 'email', label: '邮箱', type: 'email' },
+          { key: 'sent', label: '是否已发送邮件', type: 'select', options: ['未发送', '已发送'] },
+          { key: 'sentAt', label: '发送时间', type: 'date' },
+          { key: 'replyStatus', label: '回复状态', type: 'select', options: ['未回复', '积极回复', '礼貌拒绝', '需跟进', '已面谈'] },
+          { key: 'nextAction', label: '下一步动作', type: 'text' },
+          { key: 'note', label: '备注', type: 'textarea', span: true }
+        ]
+      },
+      todos: {
+        title: '待办复盘',
+        addText: '新增待办',
+        searchPlaceholder: '搜索事项、模块、复盘备注…',
+        filterField: 'status',
+        filterLabel: '状态',
+        cardTitle: 'task',
+        cardSubtitle: (item) => `${item.module || '未归类'} · 截止：${item.deadline || '未设置'}`,
+        badges: [
+          { key: 'priority', tone: 'amber' },
+          { key: 'status', tone: 'green' }
+        ],
+        fields: [
+          { key: 'task', label: '事项', type: 'text', required: true },
+          { key: 'module', label: '所属模块', type: 'select', options: ['成果清单', '材料归档', '目标院校', '套磁与申请', '复盘', '其他'] },
+          { key: 'deadline', label: '截止日期', type: 'date' },
+          { key: 'priority', label: '优先级', type: 'select', options: ['高', '中', '低'] },
+          { key: 'status', label: '状态', type: 'select', options: ['未开始', '进行中', '已完成', '已延期'] },
+          { key: 'review', label: '复盘备注', type: 'textarea', span: true }
+        ]
+      }
+    };
+
+    const defaultData = () => ({
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      achievements: [],
+      materials: [],
+      schools: [],
+      contacts: [],
+      todos: []
+    });
+
+    let state = loadState();
+    let activeTab = 'dashboard';
+    const listFilters = {};
+
+    function loadState() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        return validateData(saved).ok ? normalizeData(saved) : defaultData();
+      } catch (error) {
+        console.warn('读取本地数据失败，已使用空白数据。', error);
+        return defaultData();
+      }
+    }
+
+    function saveState() {
+      state.updatedAt = new Date().toISOString();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+
+    function normalizeData(input) {
+      const next = { ...defaultData(), ...input, version: 1 };
+      Object.keys(moduleConfig).forEach((key) => {
+        next[key] = Array.isArray(input?.[key]) ? input[key].map((item) => ({ id: item.id || uid(), ...item })) : [];
+      });
+      return next;
+    }
+
+    function validateData(input) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, message: 'JSON 顶层必须是对象。' };
+      const required = Object.keys(moduleConfig);
+      for (const key of required) {
+        if (!Array.isArray(input[key])) return { ok: false, message: `缺少数组字段：${key}` };
+        if (!input[key].every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+          return { ok: false, message: `${key} 中存在非法记录。` };
+        }
+      }
+      return { ok: true, message: '数据结构校验通过。' };
+    }
+
+    function setActiveTab(key) {
+      activeTab = key;
+      render();
+    }
+
+    function renderTabs() {
+      const tabMarkup = (isMobile) => tabs.map((tab) => {
+        const active = activeTab === tab.key;
+        return `<button data-tab="${tab.key}" class="${isMobile
+          ? `flex flex-col items-center gap-1 rounded-2xl px-1 py-2 text-[11px] ${active ? 'bg-card text-white' : 'text-muted'}`
+          : `flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm transition ${active ? 'bg-card text-white shadow-glow' : 'text-muted hover:bg-card/60 hover:text-soft'}`}">
+          <span class="${isMobile ? 'text-base' : 'grid h-8 w-8 place-items-center rounded-xl bg-white/5 text-base'}">${tab.icon}</span>
+          <span>${tab.label}</span>
+        </button>`;
+      }).join('');
+      byId('desktopTabs').innerHTML = tabMarkup(false);
+      byId('mobileTabs').innerHTML = tabMarkup(true);
+      document.querySelectorAll('[data-tab]').forEach((button) => button.addEventListener('click', () => setActiveTab(button.dataset.tab)));
+    }
+
+    function render() {
+      renderTabs();
+      const current = tabs.find((tab) => tab.key === activeTab);
+      byId('eyebrow').textContent = activeTab === 'dashboard' ? 'Dashboard' : 'Workspace';
+      byId('pageTitle').textContent = current.label;
+      if (activeTab === 'dashboard') return renderDashboard();
+      if (activeTab === 'settings') return renderSettings();
+      return renderModule(activeTab);
+    }
+
+    function getTitle(config, item) {
+      return typeof config.cardTitle === 'function' ? config.cardTitle(item) : (item[config.cardTitle] || '未命名');
+    }
+
+    function getFilteredItems(moduleKey) {
+      const config = moduleConfig[moduleKey];
+      const filter = listFilters[moduleKey] || { q: '', value: '全部' };
+      const query = filter.q.trim().toLowerCase();
+      return state[moduleKey].filter((item) => {
+        const hitQuery = !query || JSON.stringify(item).toLowerCase().includes(query);
+        const hitFilter = !filter.value || filter.value === '全部' || item[config.filterField] === filter.value;
+        return hitQuery && hitFilter;
+      });
+    }
+
+    function renderDashboard() {
+      const applied = state.schools.filter((school) => ['已投递', '入营/入围', '已录取'].includes(school.status)).length;
+      const openTodos = state.todos.filter((todo) => todo.status !== '已完成').length;
+      const deadlines = [
+        ...state.schools.flatMap((school) => [school.campDeadline, school.preDeadline].filter(Boolean).map((date) => ({ date, label: `${school.school || '院校'} 截止` }))),
+        ...state.todos.filter((todo) => todo.status !== '已完成' && todo.deadline).map((todo) => ({ date: todo.deadline, label: todo.task || '待办' }))
+      ].filter((item) => item.date >= today()).sort((a, b) => a.date.localeCompare(b.date));
+      const totalTasks = state.todos.length + state.materials.length + state.schools.length + state.contacts.length;
+      const doneTasks = state.todos.filter((todo) => todo.status === '已完成').length
+        + state.materials.filter((item) => item.hasMaterial === '已有' && item.scanned !== '未扫描').length
+        + state.schools.filter((item) => ['已投递', '入营/入围', '已录取'].includes(item.status)).length
+        + state.contacts.filter((item) => item.sent === '已发送').length;
+      const progress = totalTasks ? Math.round((doneTasks / totalTasks) * 100) : 0;
+
+      byId('app').innerHTML = `
+        <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          ${statCard('目标院校', state.schools.length, '已建立目标池')}
+          ${statCard('已投递', applied, '含入营/录取状态')}
+          ${statCard('待办', openTodos, '未完成事项')}
+          ${statCard('最近截止', deadlines[0]?.date || '暂无', deadlines[0]?.label || '添加院校或待办后显示')}
+          ${statCard('准备进度', `${progress}%`, '按材料/投递/套磁/待办估算')}
+        </div>
+
+        <div class="mt-5 grid gap-5 xl:grid-cols-[1.2fr_.8fr]">
+          <section class="rounded-3xl border border-line bg-panel/70 p-5 shadow-glow">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h3 class="text-lg font-semibold text-white">整体准备进度</h3>
+                <p class="mt-1 text-sm text-muted">不是绩效考核，只是帮助你看见下一步。</p>
+              </div>
+              <span class="text-2xl font-semibold text-white">${progress}%</span>
+            </div>
+            <div class="mt-5 h-3 overflow-hidden rounded-full bg-white/5">
+              <div class="h-full rounded-full bg-brand" style="width:${progress}%"></div>
+            </div>
+            <div class="mt-5 grid gap-3 sm:grid-cols-4">
+              ${miniMetric('成果', state.achievements.length)}
+              ${miniMetric('材料', state.materials.length)}
+              ${miniMetric('套磁', state.contacts.length)}
+              ${miniMetric('待办完成', state.todos.filter((todo) => todo.status === '已完成').length)}
+            </div>
+          </section>
+
+          <section class="rounded-3xl border border-line bg-panel/70 p-5 shadow-glow">
+            <h3 class="text-lg font-semibold text-white">近期截止</h3>
+            <div class="mt-4 space-y-3">
+              ${deadlines.slice(0, 6).map((item) => `
+                <div class="flex items-center justify-between gap-4 rounded-2xl border border-line bg-card/70 p-3">
+                  <div class="min-w-0"><p class="truncate text-sm font-medium text-white">${escapeHtml(item.label)}</p><p class="text-xs text-muted">保持节奏，不要临近补材料</p></div>
+                  <time class="shrink-0 rounded-xl bg-white/5 px-2.5 py-1 text-xs text-soft">${escapeHtml(item.date)}</time>
+                </div>
+              `).join('') || emptyBlock('暂无未来截止日期')}
+            </div>
+          </section>
+        </div>
+      `;
+    }
+
+    function statCard(label, value, hint) {
+      return `<div class="rounded-3xl border border-line bg-panel/70 p-5 shadow-glow">
+        <p class="text-sm text-muted">${label}</p>
+        <p class="mt-3 text-3xl font-semibold tracking-tight text-white">${value}</p>
+        <p class="mt-2 text-xs text-muted">${hint}</p>
+      </div>`;
+    }
+
+    function miniMetric(label, value) {
+      return `<div class="rounded-2xl border border-line bg-card/70 p-3"><p class="text-xs text-muted">${label}</p><p class="mt-1 text-xl font-semibold text-white">${value}</p></div>`;
+    }
+
+    function renderModule(moduleKey) {
+      const config = moduleConfig[moduleKey];
+      const filter = listFilters[moduleKey] || { q: '', value: '全部' };
+      const options = ['全部', ...new Set(state[moduleKey].map((item) => item[config.filterField]).filter(Boolean))];
+      const items = getFilteredItems(moduleKey);
+      byId('app').innerHTML = `
+        <section class="rounded-3xl border border-line bg-panel/70 p-4 shadow-glow sm:p-5">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h3 class="text-lg font-semibold text-white">${config.title}</h3>
+              <p class="mt-1 text-sm text-muted">共 ${state[moduleKey].length} 条记录，当前显示 ${items.length} 条。</p>
+            </div>
+            <button id="addRecord" class="rounded-2xl bg-white px-4 py-2.5 text-sm font-medium text-ink transition hover:bg-soft">${config.addText}</button>
+          </div>
+          <div class="mt-4 grid gap-3 md:grid-cols-[1fr_14rem]">
+            <input id="searchInput" value="${escapeHtml(filter.q)}" placeholder="${config.searchPlaceholder}" class="rounded-2xl border border-line bg-card px-4 py-3 text-sm text-white outline-none transition placeholder:text-muted focus:border-brand" />
+            <select id="filterSelect" class="rounded-2xl border border-line bg-card px-4 py-3 text-sm text-white outline-none focus:border-brand">
+              ${options.map((option) => `<option value="${escapeHtml(option)}" ${filter.value === option ? 'selected' : ''}>${config.filterLabel}：${escapeHtml(option)}</option>`).join('')}
+            </select>
+          </div>
+        </section>
+        <section class="mt-5 grid gap-3 xl:grid-cols-2">
+          ${items.map((item) => renderCard(moduleKey, item)).join('') || emptyBlock('还没有记录，先新增一条。')}
+        </section>
+      `;
+      byId('addRecord').addEventListener('click', () => openForm(moduleKey));
+      byId('searchInput').addEventListener('input', (event) => {
+        const cursor = event.target.selectionStart || event.target.value.length;
+        listFilters[moduleKey] = { ...(listFilters[moduleKey] || {}), q: event.target.value, value: byId('filterSelect').value };
+        renderModule(moduleKey);
+        const nextInput = byId('searchInput');
+        nextInput.focus();
+        nextInput.setSelectionRange(cursor, cursor);
+      });
+      byId('filterSelect').addEventListener('change', (event) => {
+        listFilters[moduleKey] = { ...(listFilters[moduleKey] || {}), q: byId('searchInput').value, value: event.target.value };
+        renderModule(moduleKey);
+      });
+      document.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', () => openForm(moduleKey, button.dataset.edit)));
+      document.querySelectorAll('[data-delete]').forEach((button) => button.addEventListener('click', () => deleteRecord(moduleKey, button.dataset.delete)));
+    }
+
+    function renderCard(moduleKey, item) {
+      const config = moduleConfig[moduleKey];
+      const title = getTitle(config, item);
+      const subtitle = config.cardSubtitle(item);
+      const detailFields = config.fields.filter((field) => item[field.key] && !['textarea'].includes(field.type)).slice(0, 5);
+      const textFields = config.fields.filter((field) => field.type === 'textarea' && item[field.key]);
+      return `<article class="rounded-3xl border border-line bg-panel/70 p-5 transition hover:border-white/20">
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <h4 class="truncate text-base font-semibold text-white">${escapeHtml(title)}</h4>
+            <p class="mt-1 line-clamp-2 text-sm text-muted">${escapeHtml(subtitle)}</p>
+          </div>
+          <div class="flex shrink-0 gap-2">
+            <button data-edit="${item.id}" class="rounded-xl border border-line px-3 py-1.5 text-xs text-soft hover:border-brand hover:text-white">编辑</button>
+            <button data-delete="${item.id}" class="rounded-xl border border-line px-3 py-1.5 text-xs text-muted hover:border-red-400/70 hover:text-red-200">删除</button>
+          </div>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-2">
+          ${config.badges.map((badge) => item[badge.key] ? badgePill(item[badge.key], badge.tone) : '').join('')}
+        </div>
+        <dl class="mt-4 grid gap-2 sm:grid-cols-2">
+          ${detailFields.map((field) => `<div class="rounded-2xl bg-card/70 px-3 py-2"><dt class="text-[11px] text-muted">${field.label}</dt><dd class="mt-1 truncate text-sm text-soft">${escapeHtml(item[field.key])}</dd></div>`).join('')}
+        </dl>
+        ${textFields.map((field) => `<div class="mt-3 rounded-2xl bg-card/70 px-3 py-2"><p class="text-[11px] text-muted">${field.label}</p><p class="mt-1 whitespace-pre-wrap text-sm leading-6 text-soft">${escapeHtml(item[field.key])}</p></div>`).join('')}
+        ${moduleKey === 'schools' && safeUrl(item.website) ? `<a class="mt-4 inline-flex text-sm text-brand hover:text-white" href="${escapeHtml(safeUrl(item.website))}" target="_blank" rel="noreferrer">打开官网 ↗</a>` : ''}
+      </article>`;
+    }
+
+    function badgePill(text, tone) {
+      const tones = {
+        blue: 'border-blue-400/20 bg-blue-400/10 text-blue-200',
+        green: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-200',
+        purple: 'border-purple-400/20 bg-purple-400/10 text-purple-200',
+        amber: 'border-amber-400/20 bg-amber-400/10 text-amber-200',
+        slate: 'border-slate-400/20 bg-slate-400/10 text-slate-200'
+      };
+      return `<span class="rounded-full border px-2.5 py-1 text-xs ${tones[tone] || tones.slate}">${escapeHtml(text)}</span>`;
+    }
+
+    function emptyBlock(text) {
+      return `<div class="rounded-3xl border border-dashed border-line bg-panel/40 p-8 text-center text-sm text-muted xl:col-span-2">${text}</div>`;
+    }
+
+    function openForm(moduleKey, id = null) {
+      const config = moduleConfig[moduleKey];
+      const item = id ? state[moduleKey].find((record) => record.id === id) : null;
+      byId('modalKicker').textContent = config.title;
+      byId('modalTitle').textContent = id ? '编辑记录' : config.addText;
+      byId('modalForm').innerHTML = `
+        <div class="grid gap-4 sm:grid-cols-2">
+          ${config.fields.map((field) => renderField(field, item?.[field.key] || '')).join('')}
+        </div>
+        <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <button type="button" id="cancelForm" class="rounded-2xl border border-line px-4 py-3 text-sm text-soft hover:border-white/30 hover:text-white">取消</button>
+          <button type="submit" class="rounded-2xl bg-white px-5 py-3 text-sm font-medium text-ink hover:bg-soft">保存</button>
+        </div>
+      `;
+      byId('modal').classList.remove('hidden');
+      byId('modal').classList.add('flex');
+      byId('cancelForm').addEventListener('click', closeModal);
+      byId('modalForm').onsubmit = (event) => {
+        event.preventDefault();
+        const formData = new FormData(event.currentTarget);
+        const record = { id: id || uid(), createdAt: item?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
+        config.fields.forEach((field) => { record[field.key] = String(formData.get(field.key) || '').trim(); });
+        if (id) {
+          state[moduleKey] = state[moduleKey].map((old) => old.id === id ? record : old);
+        } else {
+          state[moduleKey] = [record, ...state[moduleKey]];
+        }
+        saveState();
+        closeModal();
+        render();
+      };
+    }
+
+    function renderField(field, value) {
+      const common = `name="${field.key}" ${field.required ? 'required' : ''} class="w-full rounded-2xl border border-line bg-card px-4 py-3 text-sm text-white outline-none transition placeholder:text-muted focus:border-brand"`;
+      let control = '';
+      if (field.type === 'textarea') {
+        control = `<textarea ${common} rows="4" placeholder="可留空">${escapeHtml(value)}</textarea>`;
+      } else if (field.type === 'select') {
+        control = `<select ${common}><option value="">请选择</option>${field.options.map((option) => `<option value="${escapeHtml(option)}" ${value === option ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}</select>`;
+      } else {
+        control = `<input ${common} type="${field.type}" value="${escapeHtml(value)}" placeholder="请输入${field.label}" />`;
+      }
+      return `<label class="block ${field.span ? 'sm:col-span-2' : ''}"><span class="mb-2 block text-sm font-medium text-soft">${field.label}${field.required ? '<span class="text-red-300"> *</span>' : ''}</span>${control}</label>`;
+    }
+
+    function closeModal() {
+      byId('modal').classList.add('hidden');
+      byId('modal').classList.remove('flex');
+      byId('modalForm').reset();
+      byId('modalForm').onsubmit = null;
+    }
+
+    function deleteRecord(moduleKey, id) {
+      const item = state[moduleKey].find((record) => record.id === id);
+      if (!item) return;
+      if (!confirm(`确认删除「${getTitle(moduleConfig[moduleKey], item)}」吗？此操作不可撤销。`)) return;
+      state[moduleKey] = state[moduleKey].filter((record) => record.id !== id);
+      saveState();
+      render();
+    }
+
+    function renderSettings() {
+      byId('app').innerHTML = `
+        <section class="grid gap-5 xl:grid-cols-[.9fr_1.1fr]">
+          <div class="rounded-3xl border border-line bg-panel/70 p-5 shadow-glow">
+            <h3 class="text-lg font-semibold text-white">设置与数据</h3>
+            <p class="mt-2 text-sm leading-6 text-muted">导出 JSON 可作为备份；导入前会校验 achievements、materials、schools、contacts、todos 五个数组字段。</p>
+            <div class="mt-5 grid gap-3">
+              <button id="exportData" class="rounded-2xl bg-white px-4 py-3 text-sm font-medium text-ink hover:bg-soft">导出 JSON</button>
+              <label class="rounded-2xl border border-line bg-card px-4 py-3 text-center text-sm text-soft hover:border-brand hover:text-white">
+                导入 JSON 并覆盖当前数据
+                <input id="importData" type="file" accept="application/json,.json" class="hidden" />
+              </label>
+              <button id="clearData" class="rounded-2xl border border-red-400/30 px-4 py-3 text-sm text-red-200 hover:bg-red-400/10">清空所有数据</button>
+            </div>
+          </div>
+          <div class="rounded-3xl border border-line bg-panel/70 p-5 shadow-glow">
+            <h3 class="text-lg font-semibold text-white">当前数据概览</h3>
+            <div class="mt-4 grid gap-3 sm:grid-cols-2">
+              ${Object.entries(moduleConfig).map(([key, config]) => miniMetric(config.title, state[key].length)).join('')}
+            </div>
+            <pre class="scrollbar-thin mt-5 max-h-72 overflow-auto rounded-2xl border border-line bg-card p-4 text-xs leading-6 text-muted">${escapeHtml(JSON.stringify({ version: state.version, updatedAt: state.updatedAt, counts: Object.fromEntries(Object.keys(moduleConfig).map((key) => [key, state[key].length])) }, null, 2))}</pre>
+          </div>
+        </section>
+      `;
+      byId('exportData').addEventListener('click', exportData);
+      byId('importData').addEventListener('change', importData);
+      byId('clearData').addEventListener('click', clearData);
+    }
+
+    function exportData() {
+      const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `baoyan-command-system-${today()}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function importData(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const parsed = JSON.parse(reader.result);
+          const result = validateData(parsed);
+          if (!result.ok) return alert(`导入失败：${result.message}`);
+          if (!confirm('数据结构校验通过。确认覆盖当前所有本地数据吗？')) return;
+          state = normalizeData(parsed);
+          saveState();
+          render();
+          alert('导入成功。');
+        } catch (error) {
+          alert(`导入失败：JSON 解析错误。${error.message}`);
+        } finally {
+          event.target.value = '';
+        }
+      };
+      reader.readAsText(file, 'utf-8');
+    }
+
+    function clearData() {
+      if (!confirm('确认清空所有模块数据吗？此操作不可撤销。')) return;
+      state = defaultData();
+      saveState();
+      render();
+    }
+
+    byId('closeModal').addEventListener('click', closeModal);
+    byId('modal').addEventListener('click', (event) => {
+      if (event.target.id === 'modal') closeModal();
+    });
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !byId('modal').classList.contains('hidden')) closeModal();
+    });
+
+    render();
+  </script>
+</body>
+</html>
